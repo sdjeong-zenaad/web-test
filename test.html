@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>New HTML</title>
+</head>
+<body>
+	<p>platform: <script>document.write(navigator.platform);</script></p>
+	<p>browser: <script>document.write(navigator.userAgent);</script></p>
+
+	<hr/>
+	<h4>https://cube-api.xpla.io</h4>
+	<pre id="result1">Loading...</pre>
+	<script>
+		fetch('https://cube-api.xpla.io/v1/vault/tx-history/xpla1dt9m42z6gc0qsw4qzyx78guwmxxs4yzf5gc9v5')
+			.then(res => res.json())
+			.then(data => {
+				document.getElementById('result1').textContent = JSON.stringify(data, null, 2);
+			})
+			.catch(err => {
+				document.getElementById('result1').textContent = 'Error: ' + err;
+			});
+	</script>
+
+	<hr/>
+	<h4>http://34.22.79.133:3070</h4>
+	<pre id="result2">Loading...</pre>
+	<script>
+		fetch('http://34.22.79.133:3070/v1/vault/tx-history/xpla1dt9m42z6gc0qsw4qzyx78guwmxxs4yzf5gc9v5')
+			.then(res => res.json())
+			.then(data => {
+				document.getElementById('result2').textContent = JSON.stringify(data, null, 2);
+			})
+			.catch(err => {
+				document.getElementById('result2').textContent = 'Error: ' + err;
+			});
+	</script>
+
+</body>
+</html>
