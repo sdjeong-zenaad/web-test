@@ -257,7 +257,7 @@
     personaSelect.style.flex = "0 0 96px";
     modelSelect = el("select");
     oversizeCheck = null; // models stay selectable; warnings use ⚠ prefix
-    newBtn = el("button", "secondary", "New");
+    newBtn = el("button", "secondary", "Reset");
     toolbar.appendChild(personaSelect);
     toolbar.appendChild(modelSelect);
     toolbar.appendChild(newBtn);
