@@ -9,6 +9,61 @@
   let abortFlag = false;
   let loading = false;
 
+  const webgpuStatus = {
+    checked: false,
+    available: false,
+    reason: "",
+  };
+
+  async function requestGpuAdapter() {
+    if (!navigator.gpu) {
+      return null;
+    }
+    let adapter = await navigator.gpu.requestAdapter({
+      powerPreference: "high-performance",
+    });
+    if (!adapter) {
+      adapter = await navigator.gpu.requestAdapter();
+    }
+    if (!adapter && navigator.gpu.requestAdapters) {
+      for await (const candidate of navigator.gpu.requestAdapters()) {
+        adapter = candidate;
+        break;
+      }
+    }
+    return adapter;
+  }
+
+  async function evaluateWebGPU() {
+    if (!navigator.gpu) {
+      webgpuStatus.checked = true;
+      webgpuStatus.available = false;
+      webgpuStatus.reason =
+        "WebGPU API not exposed in this browser";
+      return webgpuStatus;
+    }
+    try {
+      const adapter = await requestGpuAdapter();
+      if (!adapter) {
+        webgpuStatus.checked = true;
+        webgpuStatus.available = false;
+        webgpuStatus.reason =
+          "No WebGPU adapter (common on Linux Chrome/Flatpak — try native Chrome or flatpak override --device=all)";
+        return webgpuStatus;
+      }
+      webgpuStatus.checked = true;
+      webgpuStatus.available = true;
+      webgpuStatus.reason = "";
+    } catch (err) {
+      webgpuStatus.checked = true;
+      webgpuStatus.available = false;
+      webgpuStatus.reason = String(
+        err && err.message ? err.message : err
+      );
+    }
+    return webgpuStatus;
+  }
+
   function progressText(report) {
     if (!report) return "";
     if (typeof report === "string") return report;
@@ -19,13 +74,63 @@
     return JSON.stringify(report);
   }
 
+  function isCacheCollisionError(err) {
+    const msg = String(err && err.message ? err.message : err);
+    return (
+      msg.includes("ConstraintError") ||
+      msg.includes("Key already exists in the object store")
+    );
+  }
+
+  async function purgeModelCache(webllm, mlcModelId, appConfig) {
+    if (!webllm) return;
+    if (typeof webllm.deleteModelAllInfoInCache === "function") {
+      await webllm.deleteModelAllInfoInCache(mlcModelId, appConfig);
+      return;
+    }
+    if (typeof webllm.deleteModelInCache === "function") {
+      await webllm.deleteModelInCache(mlcModelId, appConfig);
+    }
+  }
+
+  async function createEngine(webllm, mlcModelId, appConfig, onProgress) {
+    return webllm.CreateMLCEngine(mlcModelId, {
+      appConfig,
+      initProgressCallback: (report) => {
+        const p =
+          report && report.progress != null ? Number(report.progress) : 0;
+        if (onProgress) onProgress(p, progressText(report));
+      },
+    });
+  }
+
   window.shaberuLLM = {
+    isWebGPUAvailable() {
+      return webgpuStatus.checked && webgpuStatus.available;
+    },
+
+    getWebGPUUnavailableReason() {
+      return webgpuStatus.reason || "";
+    },
+
+    async probeWebGPU(onResult) {
+      const status = await evaluateWebGPU();
+      if (onResult) {
+        onResult(status.available, status.reason);
+      }
+      return status.available;
+    },
+
     async initModel(mlcModelId, onProgress, onReady, onError) {
       loading = true;
       abortFlag = false;
       try {
-        if (!navigator.gpu) {
-          throw new Error("WebGPU is not available in this browser");
+        const status = await evaluateWebGPU();
+        if (!status.available) {
+          throw new Error(
+            status.reason ||
+              "WebGPU adapter unavailable — WebLLM cannot run on this browser/GPU setup"
+          );
         }
         const webllm = window.webllm;
         if (!webllm || !webllm.CreateMLCEngine) {
@@ -35,14 +140,28 @@
           ...(webllm.prebuiltAppConfig || {}),
           cacheBackend: "indexeddb",
         };
-        engine = await webllm.CreateMLCEngine(mlcModelId, {
-          appConfig,
-          initProgressCallback: (report) => {
-            const p =
-              report && report.progress != null ? Number(report.progress) : 0;
-            if (onProgress) onProgress(p, progressText(report));
-          },
-        });
+        try {
+          engine = await createEngine(
+            webllm,
+            mlcModelId,
+            appConfig,
+            onProgress
+          );
+        } catch (err) {
+          if (!isCacheCollisionError(err)) {
+            throw err;
+          }
+          if (onProgress) {
+            onProgress(0, "Clearing corrupted WebLLM cache…");
+          }
+          await purgeModelCache(webllm, mlcModelId, appConfig);
+          engine = await createEngine(
+            webllm,
+            mlcModelId,
+            appConfig,
+            onProgress
+          );
+        }
         loading = false;
         if (onReady) onReady(mlcModelId);
       } catch (err) {
@@ -119,6 +238,21 @@
 
     unload() {
       engine = null;
+    },
+
+    async clearModelCache(mlcModelId) {
+      try {
+        const webllm = window.webllm;
+        if (!webllm) return false;
+        const appConfig = {
+          ...(webllm.prebuiltAppConfig || {}),
+          cacheBackend: "indexeddb",
+        };
+        await purgeModelCache(webllm, mlcModelId, appConfig);
+        return true;
+      } catch (_) {
+        return false;
+      }
     },
 
     async hasModelInCache(mlcModelId) {
