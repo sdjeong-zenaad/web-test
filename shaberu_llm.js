@@ -15,6 +15,12 @@
     reason: "",
   };
 
+  async function waitForFrames(count = 2) {
+    for (let i = 0; i < count; i += 1) {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+  }
+
   async function requestGpuAdapter() {
     if (!navigator.gpu) {
       return null;
@@ -34,7 +40,14 @@
     return adapter;
   }
 
-  async function evaluateWebGPU() {
+  async function evaluateWebGPU(options = {}) {
+    const force = Boolean(options.force);
+    if (webgpuStatus.checked && webgpuStatus.available && !force) {
+      return webgpuStatus;
+    }
+    if (force) {
+      webgpuStatus.checked = false;
+    }
     if (!navigator.gpu) {
       webgpuStatus.checked = true;
       webgpuStatus.available = false;
@@ -43,6 +56,7 @@
       return webgpuStatus;
     }
     try {
+      await waitForFrames(force ? 2 : 1);
       const adapter = await requestGpuAdapter();
       if (!adapter) {
         webgpuStatus.checked = true;
@@ -62,6 +76,23 @@
       );
     }
     return webgpuStatus;
+  }
+
+  async function probeWebGPUWithRetries(onResult, attempts = 5) {
+    let status = webgpuStatus;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+      }
+      status = await evaluateWebGPU({ force: true });
+      if (status.available) {
+        break;
+      }
+    }
+    if (onResult) {
+      onResult(status.available, status.reason);
+    }
+    return status.available;
   }
 
   function progressText(report) {
@@ -114,18 +145,14 @@
     },
 
     async probeWebGPU(onResult) {
-      const status = await evaluateWebGPU();
-      if (onResult) {
-        onResult(status.available, status.reason);
-      }
-      return status.available;
+      return probeWebGPUWithRetries(onResult, 5);
     },
 
     async initModel(mlcModelId, onProgress, onReady, onError) {
       loading = true;
       abortFlag = false;
       try {
-        const status = await evaluateWebGPU();
+        const status = await evaluateWebGPU({ force: true });
         if (!status.available) {
           throw new Error(
             status.reason ||
