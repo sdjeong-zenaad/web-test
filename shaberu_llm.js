@@ -105,6 +105,43 @@
     return JSON.stringify(report);
   }
 
+  function formatLoadError(mlcModelId, err) {
+    const msg = String(err && err.message ? err.message : err);
+    const stack =
+      err && err.stack ? String(err.stack).split("\n").slice(0, 8).join("\n") : "";
+    let webgpuApi = false;
+    try {
+      webgpuApi = !!navigator.gpu;
+    } catch (_) {
+      webgpuApi = false;
+    }
+    const deviceMemory =
+      typeof navigator.deviceMemory === "number"
+        ? navigator.deviceMemory + " GB"
+        : "unknown";
+    const hw = navigator.hardwareConcurrency || "unknown";
+    const ua = navigator.userAgent || "";
+    console.error("[WebLLM][load] failed", {
+      mlcModelId,
+      error: msg,
+      webgpuApi,
+      deviceMemory,
+      hardwareConcurrency: hw,
+      userAgent: ua,
+      stack,
+    });
+    return JSON.stringify({
+      kind: "webllm_load_failed",
+      mlc_model_id: mlcModelId,
+      error: msg,
+      stack,
+      webgpu_api: String(webgpuApi),
+      device_memory: deviceMemory,
+      hardware_concurrency: String(hw),
+      user_agent: ua,
+    });
+  }
+
   function isCacheCollisionError(err) {
     const msg = String(err && err.message ? err.message : err);
     return (
@@ -194,8 +231,31 @@
       } catch (err) {
         loading = false;
         engine = null;
-        if (onError) onError(String(err && err.message ? err.message : err));
+        if (onError) onError(formatLoadError(mlcModelId, err));
       }
+    },
+
+    buildGenOpts(payload) {
+      const genOpts = {
+        messages: payload.messages || [],
+        temperature:
+          typeof payload.temperature === "number" ? payload.temperature : 0.6,
+        top_p: typeof payload.top_p === "number" ? payload.top_p : 0.9,
+        max_tokens:
+          typeof payload.max_tokens === "number" ? payload.max_tokens : 256,
+        frequency_penalty:
+          typeof payload.frequency_penalty === "number"
+            ? payload.frequency_penalty
+            : 0.12,
+        presence_penalty:
+          typeof payload.presence_penalty === "number"
+            ? payload.presence_penalty
+            : 0,
+      };
+      if (typeof payload.top_k === "number") {
+        genOpts.top_k = payload.top_k;
+      }
+      return genOpts;
     },
 
     async chat(payloadJson, onToken, onDone, onError) {
@@ -204,20 +264,8 @@
         if (!engine) throw new Error("Engine not initialized");
         const payload =
           typeof payloadJson === "string" ? JSON.parse(payloadJson) : payloadJson;
-        const messages = payload.messages || [];
         const stream = payload.stream !== false;
-        const genOpts = {
-          messages,
-          temperature:
-            typeof payload.temperature === "number" ? payload.temperature : 0.6,
-          top_p: typeof payload.top_p === "number" ? payload.top_p : 0.9,
-          max_tokens:
-            typeof payload.max_tokens === "number" ? payload.max_tokens : 256,
-          frequency_penalty:
-            typeof payload.frequency_penalty === "number"
-              ? payload.frequency_penalty
-              : 0.12,
-        };
+        const genOpts = window.shaberuLLM.buildGenOpts(payload);
         let full = "";
         if (stream) {
           const chunks = await engine.chat.completions.create({
